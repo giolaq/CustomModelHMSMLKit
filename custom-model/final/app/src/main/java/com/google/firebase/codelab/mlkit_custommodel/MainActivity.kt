@@ -24,23 +24,18 @@ import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Toast
-
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import com.google.firebase.ml.common.FirebaseMLException
-import com.google.firebase.ml.common.modeldownload.FirebaseModelDownloadConditions
-import com.google.firebase.ml.common.modeldownload.FirebaseModelManager
-import com.google.firebase.ml.custom.*
+import com.huawei.hms.mlsdk.common.MLException
+import com.huawei.hms.mlsdk.custom.*
 import kotlinx.android.synthetic.main.activity_main.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.RuntimeException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.experimental.and
@@ -81,83 +76,42 @@ class MainActivity : AppCompatActivity(), AdapterView.OnItemSelectedListener {
             return Pair(targetWidth, targetHeight)
         }
 
-    /** Input options used for our Firebase model interpreter */
-    private val modelInputOutputOptions by lazy {
+    /** Input options used for our model interpreter */
+    private val modelInputOutputSettings by lazy {
         val inputDims = arrayOf(DIM_BATCH_SIZE, DIM_IMG_SIZE_X, DIM_IMG_SIZE_Y, DIM_PIXEL_SIZE)
         val outputDims = arrayOf(DIM_BATCH_SIZE, labelList.size)
-        FirebaseModelInputOutputOptions.Builder()
-            .setInputFormat(0, FirebaseModelDataType.BYTE, inputDims.toIntArray())
-            .setOutputFormat(0, FirebaseModelDataType.BYTE, outputDims.toIntArray())
-            .build()
+        MLModelInputOutputSettings.Factory()
+            .setInputFormat(0, MLModelDataType.BYTE, inputDims.toIntArray())
+            .setOutputFormat(0, MLModelDataType.BYTE, outputDims.toIntArray())
+            .create()
     }
 
     /** Firebase model interpreter used for the local model from assets */
-    private lateinit var modelInterpreter: FirebaseModelInterpreter
+    private lateinit var modelExecutor: MLModelExecutor
 
     /** Initialize a local model interpreter from assets file */
-    private fun createLocalModelInterpreter(): FirebaseModelInterpreter {
-        // Select the first available .tflite file as our local model
-        val localModelName = resources.assets.list("")?.firstOrNull { it.endsWith(".tflite") }
-            ?: throw(RuntimeException("Don't forget to add the tflite file to your assets folder"))
-        Log.d(TAG, "Local model found: $localModelName")
+    private fun createModelExecutor(): MLModelExecutor {
+        val customModel = MLCustomLocalModel.Factory("imagenet")
+            .setAssetPathFile("mobilenet.ms")
+            .create()
 
-        // Create an interpreter with the local model asset
-        val localModel =
-            FirebaseCustomLocalModel.Builder().setAssetFilePath(localModelName).build()
-        val localInterpreter = FirebaseModelInterpreter.getInstance(
-            FirebaseModelInterpreterOptions.Builder(localModel).build())!!
-        Log.d(TAG, "Local model interpreter initialized")
-
-        // Return the interpreter
-        return localInterpreter
-    }
-
-    /** Initialize a remote model interpreter from Firebase server */
-    private suspend fun createRemoteModelInterpreter(): FirebaseModelInterpreter {
-        return suspendCancellableCoroutine { cont ->
-            runOnUiThread {
-                Toast.makeText(baseContext, "Downloading model...", Toast.LENGTH_LONG).show()
-            }
-
-            // Define conditions required for our model to be downloaded. We only request Wi-Fi.
-            val conditions =
-                FirebaseModelDownloadConditions.Builder().requireWifi().build()
-
-            // Build a remote model object by specifying the name you assigned the model
-            // when you uploaded it in the Firebase console.
-            val remoteModel =
-                FirebaseCustomRemoteModel.Builder(REMOTE_MODEL_NAME).build()
-            val manager = FirebaseModelManager.getInstance()
-            manager.download(remoteModel, conditions).addOnCompleteListener {
-                if (!it.isSuccessful) cont.resumeWithException(
-                    RuntimeException("Remote model failed to download", it.exception))
-
-                val msg = "Remote model successfully downloaded"
-                runOnUiThread { Toast.makeText(baseContext, msg, Toast.LENGTH_SHORT).show() }
-                Log.d(TAG, msg)
-
-                val remoteInterpreter = FirebaseModelInterpreter.getInstance(
-                    FirebaseModelInterpreterOptions.Builder(remoteModel).build())!!
-                Log.d(TAG, "Remote model interpreter initialized")
-
-                // Return the interpreter via continuation object
-                cont.resume(remoteInterpreter)
-            }
-        }
+        val settings: MLModelExecutorSettings =
+            MLModelExecutorSettings.Factory(customModel).create()
+        return MLModelExecutor.getInstance(settings)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        
+
         val adapter = ArrayAdapter(
-            this, 
-            android.R.layout.simple_spinner_dropdown_item, 
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
             imagePaths.mapIndexed { idx, _ -> "Image ${idx + 1}" })
 
         spinner.adapter = adapter
         spinner.onItemSelectedListener = this
-        button_run.setOnClickListener { runModelInference() }
+        button_run.setOnClickListener { runInference() }
 
         // Disable the inference button until model is loaded
         button_run.isEnabled = false
@@ -166,23 +120,26 @@ class MainActivity : AppCompatActivity(), AdapterView.OnItemSelectedListener {
         lifecycleScope.launch(Dispatchers.IO) {
             //modelInterpreter = createLocalModelInterpreter()
             //modelInterpreter = createRemoteModelInterpreter()
+            modelExecutor = createModelExecutor()
             runOnUiThread { button_run.isEnabled = true }
         }
 
     }
 
     /** Uses model to make predictions and interpret output into likely labels. */
-    private fun runModelInference() = selectedImage?.let { image ->
+    private fun runInference() = selectedImage?.let { image ->
 
         // Create input data.
         val imgData = convertBitmapToByteBuffer(image)
 
+
         try {
             // Create model inputs from our image data.
-            val modelInputs = FirebaseModelInputs.Builder().add(imgData).build()
+            val modelInputs = MLModelInputs.Factory().add(imgData).create()
+
 
             // Perform inference using our model interpreter.
-            modelInterpreter.run(modelInputs, modelInputOutputOptions).continueWith {
+            modelExecutor.exec(modelInputs, modelInputOutputSettings).continueWith {
                 val inferenceOutput = it.result?.getOutput<Array<ByteArray>>(0)!!
 
                 // Display labels on the screen using an overlay
@@ -192,7 +149,7 @@ class MainActivity : AppCompatActivity(), AdapterView.OnItemSelectedListener {
                 topLabels
             }
 
-        } catch (exc: FirebaseMLException) {
+        } catch (exc: MLException) {
             val msg = "Error running model inference"
             Toast.makeText(baseContext, msg, Toast.LENGTH_SHORT).show()
             Log.e(TAG, msg, exc)
@@ -218,14 +175,16 @@ class MainActivity : AppCompatActivity(), AdapterView.OnItemSelectedListener {
     @Synchronized
     private fun convertBitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
         val imgData = ByteBuffer.allocateDirect(
-                DIM_BATCH_SIZE * DIM_IMG_SIZE_X * DIM_IMG_SIZE_Y * DIM_PIXEL_SIZE).apply {
+            DIM_BATCH_SIZE * DIM_IMG_SIZE_X * DIM_IMG_SIZE_Y * DIM_PIXEL_SIZE
+        ).apply {
             order(ByteOrder.nativeOrder())
             rewind()
         }
         val scaledBitmap =
             Bitmap.createScaledBitmap(bitmap, DIM_IMG_SIZE_X, DIM_IMG_SIZE_Y, true)
         scaledBitmap.getPixels(
-            imageBuffer, 0, scaledBitmap.width, 0, 0, scaledBitmap.width, scaledBitmap.height)
+            imageBuffer, 0, scaledBitmap.width, 0, 0, scaledBitmap.width, scaledBitmap.height
+        )
         // Convert the image to int points.
         var pixel = 0
         for (i in 0 until DIM_IMG_SIZE_X) {
@@ -251,14 +210,16 @@ class MainActivity : AppCompatActivity(), AdapterView.OnItemSelectedListener {
 
             // Determine how much to scale down the image
             val scaleFactor = max(
-                    selectedImage!!.width.toFloat() / targetWidth.toFloat(),
-                    selectedImage!!.height.toFloat() / maxHeight.toFloat())
+                selectedImage!!.width.toFloat() / targetWidth.toFloat(),
+                selectedImage!!.height.toFloat() / maxHeight.toFloat()
+            )
 
             val resizedBitmap = Bitmap.createScaledBitmap(
-                    selectedImage!!,
-                    (selectedImage!!.width / scaleFactor).toInt(),
-                    (selectedImage!!.height / scaleFactor).toInt(),
-                    true)
+                selectedImage!!,
+                (selectedImage!!.width / scaleFactor).toInt(),
+                (selectedImage!!.height / scaleFactor).toInt(),
+                true
+            )
 
             image_view.setImageBitmap(resizedBitmap)
             selectedImage = resizedBitmap

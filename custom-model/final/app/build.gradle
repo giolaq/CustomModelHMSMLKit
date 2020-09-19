@@ -22,7 +22,7 @@ android {
         }
     }
     aaptOptions {
-        noCompress "tflite"
+        noCompress "ms"
     }
 }
 
@@ -41,10 +41,7 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.2.0-rc02'
     implementation 'androidx.constraintlayout:constraintlayout:1.1.3'
 
-    // Firebase and MLKit
-    implementation 'com.google.firebase:firebase-core:17.2.1'
-    implementation 'com.google.firebase:firebase-ml-model-interpreter:22.0.0'
-
+    implementation 'com.huawei.hms:ml-computer-model-executor:2.0.2.301'
     // Test-only dependencies
     testImplementation 'junit:junit:4.12'
     androidTestImplementation 'androidx.test.ext:junit:1.1.1'
