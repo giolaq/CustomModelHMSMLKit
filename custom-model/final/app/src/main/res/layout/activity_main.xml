@@ -18,7 +18,7 @@
         app:layout_constraintEnd_toEndOf="parent"
         android:contentDescription="Select image for text recognition" />
 
-    <com.google.firebase.codelab.mlkit_custommodel.GraphicOverlay
+    <com.laquysoft.custommodel.GraphicOverlay
         android:id="@+id/graphic_overlay"
         android:layout_width="fill_parent"
         android:layout_height="fill_parent"
